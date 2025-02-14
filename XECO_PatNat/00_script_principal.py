@@ -90,6 +90,7 @@ start_time_global = time.time()
 # Liste des scripts à exécuter
 scripts = [
     "01_package_verification.py",
+    "03_inputs_xlsx2txt.py",
     "11_znieff_xml_download_list.py",
     "12_znieff_xml2docx_com.py",
     "13_znieff_xml2xlsx_esp.py",
