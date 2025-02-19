@@ -118,7 +118,7 @@ def process_xml_files_in_folder(folder_path):
                     # Concaténation des valeurs NM_SFFZN et LB_ZN pour le nom de l'onglet
                     sheet_name = f"{nm_sffzn} - {lb_zn}"
                     sheet_name_truncated = truncate_sheet_name(sheet_name)  # Tronquer le nom de l'onglet à 31 caractères
-                    hab_presence[sheet_name] = set(df['LB_HAB'])
+                    hab_presence[sheet_name_truncated] = set(df['LB_HAB'])
 
                     # Write the DataFrame to a new sheet in the Excel file
                     df.to_excel(writer, sheet_name=sheet_name_truncated, index=False)
@@ -129,9 +129,19 @@ def process_xml_files_in_folder(folder_path):
                 'LB_HAB': list(unique_lb_habs)
             }
 
-            # Add columns to the summary for each XML file processed
+            # Ensure each list in the summary has the same length
             for sheet_name in hab_presence:
-                summary_data[sheet_name] = ['X' if hab in hab_presence[sheet_name] else '' for hab in unique_lb_habs]
+                # For each LB_HAB, ensure there is a corresponding value (either 'X' or '')
+                summary_data[sheet_name] = [
+                    'X' if hab in hab_presence[sheet_name] else '' for hab in summary_data['LB_HAB']
+                ]
+
+            # Handle any missing LB_HAB in case of unequal lengths
+            max_len = max(len(summary_data['LB_CODE']), len(summary_data['LB_HAB']))
+            for key, value in summary_data.items():
+                # If the column has fewer elements than the maximum length, pad with empty strings
+                if len(value) < max_len:
+                    value.extend([''] * (max_len - len(value)))
 
             # Convert the summary data to a DataFrame
             summary_df = pd.DataFrame(summary_data)

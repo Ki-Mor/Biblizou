@@ -1,7 +1,7 @@
 """
 Author : ExEco Environnement
 Edition date : 2025/02
-Name : 14_znieff_xml2xlsx_hab
+Name : 24_n2000_xml2xlsx_hab
 Group : Biblio_PatNat
 """
 
@@ -24,8 +24,8 @@ def truncate_sheet_name(sheet_name):
 
 def xml_to_dataframe(xml_file):
     """
-    Parse the XML file and return a DataFrame with the contents of the <LB_CODE>, <LB_HAB>, and <LB_ZN> tags
-    inside the <ZNIEFF> elements, but only for rows with <FG_TYPO> == 'D' followed by <LB_CODE> and <LB_HAB>.
+    Parse the XML file and return a DataFrame with the contents of the <CD_UE>, <LB_HAB>, and <LB_ZN> tags
+    inside the <BIOTOP> elements, but only for rows with <FG_TYPO> == 'D' followed by <CD_UE> and <LB_HAB>.
     """
     try:
         # Parse the XML file
@@ -33,50 +33,44 @@ def xml_to_dataframe(xml_file):
         root = tree.getroot()
 
         # Initialize lists to store the data
-        lb_codes, lb_habs, lb_zn, nm_sffzn= [], [], "", ""
+        pairs = []  # List of tuples (CD_UE, LB_HABDH_FR)
+        site_name = ""
+        sitecode = ""
 
-        for znieff_elem in root.iter('ZNIEFF'):
-            nm_sffzn_elem = znieff_elem.find('NM_SFFZN')
-            lb_zn_elem = znieff_elem.find('LB_ZN')
+        # Iterate through <BIOTOP> elements
+        for n2000_elem in root.iter('BIOTOP'):
+            # Extract SITECODE and SITE_NAME from the current <BIOTOP> element
+            sitecode_elem = n2000_elem.find('SITECODE')
+            site_name_elem = n2000_elem.find('SITE_NAME')
 
-            if nm_sffzn_elem is not None:
-                nm_sffzn = nm_sffzn_elem.text  # Get NM_SFFZN value
+            if sitecode_elem is not None:
+                sitecode = sitecode_elem.text  # Get SITECODE value
 
-            if lb_zn_elem is not None:
-                lb_zn = lb_zn_elem.text  # Get LB_ZN value
+            if site_name_elem is not None:
+                site_name = site_name_elem.text  # Get SITE_NAME value
 
             # Iterate through the <TYPO_INFO_ROW> elements
-            for typo_info_row_elem in znieff_elem.iter('TYPO_INFO_ROW'):
-                fg_typo_elem = typo_info_row_elem.find('FG_TYPO')
+            for typo_info_row_elem in n2000_elem.iter('HABIT1_ROW'):
+                cd_hab_elem = typo_info_row_elem.find('CD_UE')
+                lb_habdh_fr_elem = typo_info_row_elem.find('LB_HABDH_FR')
 
-                # Only consider the LB_CODE and LB_HAB if the previous <FG_TYPO> has the value 'D'
-                if fg_typo_elem is not None and fg_typo_elem.text == 'D':
-                    # Extract LB_CODE and LB_HAB for the current <TYPO_INFO_ROW>
-                    for lb_code_elem in typo_info_row_elem.iter('LB_CODE'):
-                        lb_codes.append(lb_code_elem.text)
+                if cd_hab_elem is not None and lb_habdh_fr_elem is not None:
+                    pairs.append((cd_hab_elem.text, lb_habdh_fr_elem.text))
 
-                    for lb_hab_elem in typo_info_row_elem.iter('LB_HAB'):
-                        lb_habs.append(lb_hab_elem.text)
-
-        # Create a DataFrame from the extracted data
-        data = {
-            'LB_CODE': lb_codes,
-            'LB_HAB': lb_habs
-        }
-
-        df = pd.DataFrame(data)
-        return df, lb_zn, nm_sffzn  # Return LB_ZN and NM_SFFZN along with the DataFrame
-
+        # Convert the list of tuples to a DataFrame
+        df = pd.DataFrame(pairs, columns=['CD_UE', 'LB_HABDH_FR'])
+        return df, site_name, sitecode  # Return SITE_NAME and SITECODE along with the DataFrame
     except ET.ParseError as e:
         print(f"Error parsing XML file {xml_file}: {e}")
-        return pd.DataFrame(columns=['LB_CODE', 'LB_HAB']), "", ""
+        return pd.DataFrame(columns=['CD_UE', 'LB_HABDH_FR']), "", ""
     except Exception as e:
         print(f"Unexpected error with file {xml_file}: {e}")
-        return pd.DataFrame(columns=['LB_CODE', 'LB_HAB']), "", ""
+        return pd.DataFrame(columns=['CD_UE', 'LB_HABDH_FR']), "", ""
+
 
 def process_xml_files_in_folder(folder_path):
     """
-    Process all XML files in a folder and export the data to an Excel file with a summary sheet for each LB_CODE.
+    Process all XML files in a folder and export the data to an Excel file with a summary sheet for each CD_UE.
     """
     # Validate the folder path
     if not os.path.isdir(folder_path):
@@ -84,20 +78,20 @@ def process_xml_files_in_folder(folder_path):
         return
 
     # List all XML files in the folder
-    xml_files = [f for f in os.listdir(folder_path) if f.endswith('.xml') and not f.startswith('FR') and len(f) == 13]
+    xml_files = [f for f in os.listdir(folder_path) if f.endswith('.xml') and f.startswith('FR') and len(f) == 13]
 
-    # Initialize sets to store unique LB_CODE and LB_HAB
-    unique_lb_codes = set()
-    unique_lb_habs = set()
+    # Initialize sets to store unique CD_UE and LB_HABDH_FR
+    unique_cd_ues = set()
+    unique_lb_habdh_frs = set()
 
-    # Dictionary to store the presence of LB_HAB in each file
+    # Dictionary to store the presence of LB_HABDH_FR in each file
     hab_presence = {}
 
     # Get the current date and time for the filename
     current_time = datetime.now().strftime("%Y%m%d%H%M%S")
 
     # Define the output Excel file path with the timestamp
-    excel_file = os.path.join(folder_path, f'output_znieff_xml2xlsx_hab_{current_time}.xlsx')
+    excel_file = os.path.join(folder_path, f'output_n2000_xml2xlsx_hab_{current_time}.xlsx')
 
     # Create an Excel writer object
     try:
@@ -107,41 +101,31 @@ def process_xml_files_in_folder(folder_path):
                 # Construct the full path to the XML file
                 full_path = os.path.join(folder_path, xml_file)
 
-                # Convert the XML file to a DataFrame and get NM_SFFZN
-                df, lb_zn, nm_sffzn = xml_to_dataframe(full_path)
+                # Convert the XML file to a DataFrame and get SITECODE
+                df, site_name, sitecode = xml_to_dataframe(full_path)
 
                 if not df.empty:
-                    # Update unique LB_CODE and LB_HAB sets
-                    unique_lb_codes.update(df['LB_CODE'].unique())
-                    unique_lb_habs.update(df['LB_HAB'].unique())
+                    # Update unique CD_UE and LB_HABDH_FR sets
+                    unique_cd_ues.update(df['CD_UE'].unique())
+                    unique_lb_habdh_frs.update(df['LB_HABDH_FR'].unique())
 
-                    # Concaténation des valeurs NM_SFFZN et LB_ZN pour le nom de l'onglet
-                    sheet_name = f"{nm_sffzn} - {lb_zn}"
+                    # Concaténation des valeurs SITECODE et SITE_NAME pour le nom de l'onglet
+                    sheet_name = f"{sitecode} - {site_name}"
                     sheet_name_truncated = truncate_sheet_name(sheet_name)  # Tronquer le nom de l'onglet à 31 caractères
-                    hab_presence[sheet_name_truncated] = set(df['LB_HAB'])
+                    hab_presence[sheet_name] = set(df['LB_HABDH_FR'])
 
                     # Write the DataFrame to a new sheet in the Excel file
                     df.to_excel(writer, sheet_name=sheet_name_truncated, index=False)
 
             # Create the summary table
             summary_data = {
-                'LB_CODE': list(unique_lb_codes),
-                'LB_HAB': list(unique_lb_habs)
+                'CD_UE': list(unique_cd_ues),
+                'LB_HABDH_FR': list(unique_lb_habdh_frs)
             }
 
-            # Ensure each list in the summary has the same length
+            # Add columns to the summary for each XML file processed
             for sheet_name in hab_presence:
-                # For each LB_HAB, ensure there is a corresponding value (either 'X' or '')
-                summary_data[sheet_name] = [
-                    'X' if hab in hab_presence[sheet_name] else '' for hab in summary_data['LB_HAB']
-                ]
-
-            # Handle any missing LB_HAB in case of unequal lengths
-            max_len = max(len(summary_data['LB_CODE']), len(summary_data['LB_HAB']))
-            for key, value in summary_data.items():
-                # If the column has fewer elements than the maximum length, pad with empty strings
-                if len(value) < max_len:
-                    value.extend([''] * (max_len - len(value)))
+                summary_data[sheet_name] = ['X' if hab in hab_presence[sheet_name] else '' for hab in unique_lb_habdh_frs]
 
             # Convert the summary data to a DataFrame
             summary_df = pd.DataFrame(summary_data)
