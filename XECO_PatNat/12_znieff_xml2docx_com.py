@@ -100,7 +100,7 @@ def process_xml_files_in_folder(folder_path):
     current_time = datetime.now().strftime("%Y%m%d%H%M%S")
 
     # Define the output DOCX file path with the timestamp and desired name format
-    docx_file = os.path.join(folder_path, f'output_znieff_xml2docx_com_{current_time}.docx')
+    docx_file = os.path.join(folder_path, f'ZNIEFF_Descriptions_des sites_{current_time}.docx')
 
     # Create a new DOCX document
     doc = Document()

@@ -156,7 +156,7 @@ def process_xml_files_in_folder(folder_path):
     plantae_data = []
 
     current_time = datetime.now().strftime("%Y%m%d%H%M%S")
-    excel_file = os.path.join(folder_path, f'output_n2000_xml2xlsx_esp_{current_time}.xlsx')
+    excel_file = os.path.join(folder_path, f'N2000_Synthèse_des_espèces_AnxI-II_{current_time}.xlsx')
 
     try:
         print(f"\nDébut du traitement des fichiers XML...")

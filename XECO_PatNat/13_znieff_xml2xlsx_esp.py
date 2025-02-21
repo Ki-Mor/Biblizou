@@ -123,7 +123,7 @@ def process_xml_files_in_folder(folder_path):
     current_time = datetime.now().strftime("%Y%m%d%H%M%S")
 
     # Define the output Excel file path with the timestamp
-    excel_file = os.path.join(folder_path, f'output_znieff_xml2xlsx_esp_{current_time}.xlsx')
+    excel_file = os.path.join(folder_path, f'ZNIEFF_synthèse_des_esp_déterminantes_{current_time}.xlsx')
 
     # Create an Excel writer object
     try:
