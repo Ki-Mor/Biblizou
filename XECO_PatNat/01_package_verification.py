@@ -10,8 +10,7 @@ import sys
 
 # Liste des packages à installer ou mettre à jour
 packages = [
-    "PyQt5",
-    "PySide2",
+    #"PyQt5",
     "python-docx",
     "pandas",
     "pip",
