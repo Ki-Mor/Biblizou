@@ -99,6 +99,7 @@ scripts = [
     "22_n2000_xml2docx_desc.py",
     "23_n2000_xml2xlsx_esp.py",
     "24_n2000_xml2xlsx_hab.py"
+    "99_Delete_useless_files.py"
 ]
 
 # Fonction pour exécuter un script en passant le chemin du dossier
