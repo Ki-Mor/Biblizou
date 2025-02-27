@@ -1,4 +1,3 @@
-#TODO !!!!URGENT!!!! éventuellement modifier les noms des outputs pour qu'ils correspondent mieux au nom des scripts
 #TODO dans les n2000 hab les codes UE ne correspondent pas au LB_HABDH_FR
 #TODO dans les znieff esp les onglets cachés sont mal nommés
 #TODO Gestion des erreurs, il arrive qu'il n'y ait pas de ZNIEFF ou pas de N2000 donc pas de xml à télécharger :
