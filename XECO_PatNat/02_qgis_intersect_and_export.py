@@ -1,3 +1,20 @@
+o
+
+OtherLayer = QgsProject.instance().mapLayersByName("linear")[0]
+AreaLayer = QgsProject.instance().mapLayersByName("parcelle_finale")[0]
+
+for feature in intersect_layer.getFeatures():
+    sql_expression = f''' fid = {feature.id()} '''
+    intersect_layer.setSubsetString(sql_expression)  # This will filter out the features in the `intersect_layer`
+    processing.run("native:selectbylocation",
+    {'INPUT': input_layer,
+    'PREDICATE':[0],
+    'INTERSECT': intersect_layer,
+    'METHOD':0})
+
+
+
+
 """
 Author : ExEco Environnement
 Edition date : 2025/02
