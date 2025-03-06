@@ -199,6 +199,8 @@ pivot_df_status = df_status.pivot_table(
     fill_value=''
 )
 
+print (pivot_df_status)
+
 
 # # Exporter la table pivot_df_commune dans un fichier CSV séparé par des points-virgules
 # pivot_df_status_path = Path(folder_path) / "pivot_df_status.csv"
