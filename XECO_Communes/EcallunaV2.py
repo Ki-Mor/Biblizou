@@ -219,16 +219,6 @@ def enrich_row(index, row):
     logging.info(f"Ligne {index} traitée: CD_Ref={row['CD_Ref']}, REGNE={taxref_data['REGNE']}, GROUPE={taxref_data['GROUPE']}, NOM_COMPLET={taxref_data['NOM_COMPLET']}, NOM_VERN={taxref_data['NOM_VERN']}")
 
 
-def process_data():
-    #Orchestre la correction et l'enrichissement des données.
-    logging.info("Début du traitement des données.")
-    correct_CD_Ref_data()
-    enrich_taxref_data()
-    logging.info("Traitement des données terminé.")
-
-process_data()
-
-
 def fetch_status_data(batch: List[int]) -> List[dict]:
     url_base = 'https://taxref.mnhn.fr/api/status/search/lines?locationId=INSEEC29241&page=1&size=10000'
     url_complete = url_base + ''.join([f'&taxrefId={elem}' for elem in batch])
@@ -259,19 +249,25 @@ def enrich_status_data():
         if status_data:
             all_status_data.extend(status_data)
 
-    # Création d'un dictionnaire {CD_Ref: Liste de statuts}
-    status_dict = {}
+    # Création d'une liste de dictionnaires pour construire un DataFrame
+    status_rows = []
     for entry in all_status_data:
         taxref_id = entry.get('taxrefId', 0)
-        status = entry.get('statusLabel', '')  # Récupération du libellé du statut
-        if taxref_id in status_dict:
-            status_dict[taxref_id].append(status)
-        else:
-            status_dict[taxref_id] = [status]
+        status_code = entry.get('statusCode', '')  # Code du statut
+        status_type = entry.get('statusTypeName', '')  # Type du statut
 
-    # Mise à jour de global_df avec la colonne STATUTS
-    with lock:
-        global_df['STATUTS'] = global_df['CD_Ref'].map(lambda x: ', '.join(status_dict.get(x, [])))
+        # On ajoute chaque statut en tant que nouvelle ligne
+        status_rows.append({
+            'CD_Ref': taxref_id,
+            'statusCode': status_code,
+            'statusTypeName': status_type
+        })
+
+    # Création du DataFrame des statuts
+    status_df = pd.DataFrame(status_rows)
+
+    # Fusionner avec le DataFrame principal en dupliquant les entrées
+    global_df = global_df.merge(status_df, on='CD_Ref', how='left')
 
     logging.info("Enrichissement des statuts terminé.")
 
@@ -284,7 +280,8 @@ def process_data():
     logging.info("Traitement des données terminé.")
 
 process_data()
-print(global_df.head(25))
+
+print(global_df)
 
 
 # # Pivot table pour les années par commune
