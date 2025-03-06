@@ -91,15 +91,15 @@ start_time_global = time.time()
 scripts = [
     # "01_package_verification.py",
     # "03_inputs_xlsx2txt.py",
-    # "11_znieff_xml_download_list.py",
-    # "12_znieff_xml2docx_com.py",
-    # "13_znieff_xml2xlsx_esp.py",
+    "11_znieff_xml_download_list.py",
+    "12_znieff_xml2docx_com.py",
+    "13_znieff_xml2xlsx_esp.py",
     "14_znieff_xml2xlsx_hab.py"
     "21_n2000_xml_download_list.py",
     "22_n2000_xml2docx_desc.py",
     "23_n2000_xml2xlsx_esp.py",
     "24_n2000_xml2xlsx_hab.py"
-    "99_Delete_useless_files.py"
+    # "99_Delete_useless_files.py"
 ]
 
 # Fonction pour exécuter un script en passant le chemin du dossier
