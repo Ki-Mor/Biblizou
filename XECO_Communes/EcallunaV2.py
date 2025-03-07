@@ -92,7 +92,7 @@ for file_path in csv_files:
 # Fonction pour enrichir global_df
 def process_row(index, row, cache):
     if pd.notna(row['NomTaxCBNB']) and row['NomTaxCBNB'].strip() != "":
-        scientific_name, reference_id = fuzzy_match_taxa_with_cache(row['NomTaxCBNB'])
+        scientific_name, reference_id = fuzzy_match(row['NomTaxCBNB'])
         with lock:
             global_df.at[index, 'CD_Ref'] = reference_id
         logging.info(f"Modifications pour l'index {index}: {row['NomTaxCBNB']} -> {scientific_name}, {reference_id}")
@@ -110,7 +110,7 @@ def correct_CD_Ref_data():
         for future in concurrent.futures.as_completed(futures):
             future.result()
 
-def fuzzy_match_taxa_with_cache(nom_tax: str) -> Tuple[str, int]:
+def fuzzy_match(nom_tax: str) -> Tuple[str, int]:
     if nom_tax in cache_fuzzy_results:
         return cache_fuzzy_results[nom_tax]
 
@@ -134,8 +134,7 @@ def fuzzy_match_taxa_with_cache(nom_tax: str) -> Tuple[str, int]:
             time.sleep(2 ** attempt)
     return "", 0
 
-
-def get_taxref_data(CD_Ref, cache={}):
+def fetch_taxref_data(CD_Ref, cache={}):
     # Vérifier si les données sont déjà en cache
     if CD_Ref in cache:
         return cache[CD_Ref]
@@ -166,7 +165,7 @@ def get_taxref_data(CD_Ref, cache={}):
             if data:
                 # Récupérer les informations pertinentes directement dans la réponse
                 result = {
-                    'REGNE': data.get('kingdomName', ''),
+                    'REGNE': data.get('vernacularKingdomName', ''),
                     'GROUPE': data.get('vernacularGroup2', ''),
                     'NOM_COMPLET': data.get('fullName', ''),
                     'NOM_VERN': data.get('frenchVernacularName', '')
@@ -201,7 +200,7 @@ def enrich_taxref_data():
 
 def enrich_row(index, row):
     # Récupérer les données de TaxRef pour le CD_Ref donné
-    taxref_data = get_taxref_data(row['CD_Ref'], cache_taxref_results)
+    taxref_data = fetch_taxref_data(row['CD_Ref'], cache_taxref_results)
 
     # Couper NOM_VERN avant la première virgule
     nom_vern = taxref_data['NOM_VERN']
@@ -218,88 +217,104 @@ def enrich_row(index, row):
     # Ajouter un message de log pour indiquer que la ligne a été traitée
     logging.info(f"Ligne {index} traitée: CD_Ref={row['CD_Ref']}, REGNE={taxref_data['REGNE']}, GROUPE={taxref_data['GROUPE']}, NOM_COMPLET={taxref_data['NOM_COMPLET']}, NOM_VERN={taxref_data['NOM_VERN']}")
 
+# Pipeline de traitement
+def process_data():
+    logging.info("Début du traitement des données.")
+    correct_CD_Ref_data()
+    enrich_taxref_data()
+    logging.info("Traitement des données terminé.")
 
+process_data()
+
+# Fonction pour récupérer les données de statut par lots
 def fetch_status_data(batch: List[int]) -> List[dict]:
     url_base = 'https://taxref.mnhn.fr/api/status/search/lines?locationId=INSEEC29241&page=1&size=10000'
     url_complete = url_base + ''.join([f'&taxrefId={elem}' for elem in batch])
 
-    for attempt in range(5):  # Tentatives de requêtes
+    for attempt in range(3):  # Tentatives de requêtes
         try:
-            response = session.get(url_complete, headers={'accept': 'application/hal+json;version=1'}, timeout=30)
+            response = requests.get(url_complete, headers={'accept': 'application/hal+json;version=1'})
             if response.status_code == 200:
                 return response.json().get('_embedded', {}).get('status', [])
             else:
-                logging.warning(f"Erreur pour le lot {batch}, tentative {attempt + 1}. Code HTTP: {response.status_code}")
+                logging.warning(
+                    f"Erreur pour le lot {batch}, tentative {attempt + 1}. Code HTTP: {response.status_code}")
         except requests.RequestException as e:
             logging.error(f"Erreur lors de la requête pour le lot {batch}: {e}")
         time.sleep(2)
     return []
 
-def enrich_status_data():
-    global global_df
-    logging.info("Enrichissement des statuts de conservation depuis TaxRef")
 
-    # Diviser les CD_Ref en lots de 150
-    taxref_ids = global_df['CD_Ref'].unique().tolist()
-    batches = [taxref_ids[i:i + 150] for i in range(0, len(taxref_ids), 150)]
+# Diviser les IDs en lots
+taxref_ids = global_df['CD_Ref'].unique().tolist()
+batches = [taxref_ids[i:i + 150] for i in range(0, len(taxref_ids), 150)]
 
-    all_status_data = []
-    for batch in batches:
-        status_data = fetch_status_data(batch)
-        if status_data:
-            all_status_data.extend(status_data)
+# Récupérer les données de statut pour chaque lot
+all_status_data = []
+for batch in batches:
+    status_data = fetch_status_data(batch)
+    if status_data:
+        all_status_data.extend(status_data)
 
-    # Création d'une liste de dictionnaires pour construire un DataFrame
-    status_rows = []
-    for entry in all_status_data:
-        taxref_id = entry.get('taxrefId', 0)
-        status_code = entry.get('statusCode', '')  # Code du statut
-        status_type = entry.get('statusTypeName', '')  # Type du statut
+# Traiter les données extraites
+extracted_data = []
+for item in all_status_data:
+    taxon = item.get('taxon', {})
+    extracted_data.append({
+        'id': taxon.get('id', ''),
+        'scientificName': taxon.get('scientificName', ''),
+        'statusTypeName': item.get('statusTypeName', ''),
+        'statusCode': item.get('statusCode', '')
+    })
 
-        # On ajoute chaque statut en tant que nouvelle ligne
-        status_rows.append({
-            'CD_Ref': taxref_id,
-            'statusCode': status_code,
-            'statusTypeName': status_type
-        })
+# Créer un DataFrame avec les données de statut
+df_status = pd.DataFrame(extracted_data)
 
-    # Création du DataFrame des statuts
-    status_df = pd.DataFrame(status_rows)
-
-    # Fusionner avec le DataFrame principal en dupliquant les entrées
-    global_df = global_df.merge(status_df, on='CD_Ref', how='left')
-
-    logging.info("Enrichissement des statuts terminé.")
-
-# Ajout de la nouvelle fonction au pipeline de traitement
-def process_data():
-    logging.info("Début du traitement des données.")
-    correct_CD_Ref_data()
-    enrich_taxref_data()
-    enrich_status_data()  # Ajout de l'enrichissement des statuts
-    logging.info("Traitement des données terminé.")
-
-process_data()
-
-print(global_df)
+# Fusionner les données de statut avec le DataFrame global
+df_status = df_status.merge(global_df[['CD_Ref', 'Commune', 'Année_DernièreObservation', 'NOM_COMPLET', 'NOM_VERN']],
+                            left_on='id', right_on='CD_Ref', how='left')
 
 
-# # Pivot table pour les années par commune
-# pivot_df_commune = global_df.pivot_table(
-#     index=['CD_Ref', 'NOM_COMPLET'],
-#     columns='Commune',
-#     values=['Année_DernièreObservation'],
-#     aggfunc={'Année_DernièreObservation': 'max'},
-#     fill_value=''
-# )
+df_status_clean = df_status.fillna(0)
+print(df_status_clean.dtypes)
+print(df_status_clean.head(10))
 
-# pivot_df_status = global_df.pivot_table(
-#     index=['CD_Ref', 'NOM_COMPLET'],
-#     columns='statusTypeName',
-#     values=['statusCode'],
-#     aggfunc='first',
-#     fill_value=''
-# )
 
-# print(pivot_df_commune.head(25))
-# print(pivot_df_status.head(25))
+df_status_clean['CD_Ref'] = pd.to_numeric(df_status_clean['CD_Ref'], errors='coerce').astype('Int64')
+df_status_clean['Année_DernièreObservation'] = pd.to_numeric(df_status_clean['Année_DernièreObservation'], errors='coerce').astype('Int64')
+
+
+# print(f'NOM_COMPLET {df_status['NOM_COMPLET'].isna().sum()}')
+# print(f'NOM_COMPLET {df_status['NOM_VERN'].isna().sum()}')
+#
+# df_status['NOM_COMPLET'] = df_status['NOM_COMPLET'].fillna('')
+# df_status['NOM_VERN'] = df_status['NOM_VERN'].fillna('')
+#
+# print(df_status.index)
+# df_status.reset_index(inplace=True)
+#
+# print(df_status.dtypes)
+# print(df_status[df_status['CD_Ref'].isna()])
+
+
+# Pivot table pour les années par commune
+pivot_df_commune = df_status_clean.pivot_table(
+    index=['CD_Ref', 'NOM_COMPLET'],
+    columns='Commune',
+    values='Année_DernièreObservation',
+    aggfunc='max',
+    fill_value=''
+)
+
+
+# Pivot table pour les années par status
+pivot_df_status = df_status_clean.pivot_table(
+    index=['CD_Ref', 'NOM_COMPLET'],
+    columns='statusTypeName',
+    values=['statusCode'],
+    aggfunc='first',
+    fill_value=''
+)
+
+print(pivot_df_commune.head(25))
+print(pivot_df_status.head(25))
