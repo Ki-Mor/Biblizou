@@ -1,8 +1,21 @@
 """
-Author : ExEco Environnement
-Edition date : 2025/02
-Name : 14_znieff_xml2xlsx_hab
-Group : Biblio_PatNat
+Auteur : ExEco Environnement - François Botcazou
+Date de création : 2025/02
+Dernière mise à jour : 2025/03
+Version : 1.0
+Nom : ZnieffXmlToXlsxHab.py
+Groupe : Biblizou_PatNat
+Description : Module pour extraire des données d'habitats déterminants à partir de fichiers XML et les exporter dans un fichier Excel.
+Dépendances :
+    - Python 3.x
+    - QGIS (QgsMessageLog)
+    - xml.etree.ElementTree
+    - pandas
+    - openpyxl
+    - os, datetime
+
+Utilisation :
+    Ce module doit être appelé depuis une extension QGIS.
 """
 
 import xml.etree.ElementTree as ET

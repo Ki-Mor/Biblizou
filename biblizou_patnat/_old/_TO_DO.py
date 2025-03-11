@@ -1,7 +1,7 @@
 #TODO dans les n2000 hab les codes UE ne correspondent pas au LB_HABDH_FR
 #TODO dans les znieff esp les onglets cachés sont mal nommés
 #TODO Gestion des erreurs, il arrive qu'il n'y ait pas de ZNIEFF ou pas de N2000 donc pas de xml à télécharger :
-# éviter le message d'erreur 2025-02-14 11:32:25,699 - ERROR - Le fichier 'input_xml_n2000_download_list.txt' n'a pas été trouvé dans le dossier \\192.168.1.100\ExEco_Env\Affaires_en_cours\XECO_2403_Carrière Coat Culoden_Rosporden_29\DATA\XECO_PatNat.
+# éviter le message d'erreur 2025-02-14 11:32:25,699 - ERROR - Le fichier 'input_xml_n2000_download_list.txt' n'a pas été trouvé dans le dossier \\192.168.1.100\ExEco_Env\Affaires_en_cours\XECO_2403_Carrière Coat Culoden_Rosporden_29\DATA\biblizou_patnat.
 #TODO lors du téléchargement des xml : ignorer la 1ere ligne sinon erreur :
 # 2025-02-14 11:32:23,838 - ERROR - Erreur HTTP lors du téléchargement de https://inpn.mnhn.fr/docs/ZNIEFF/znieffxml/ID_MNHN.xml: 404 Client Error: Not Found for url: https://inpn.mnhn.fr/docs/ZNIEFF/znieffxml/ID_MNHN.xml
 #TODO Le script dans le modeleur ne fonctionne pas en python. Il faut aussi le rendre indépendant de la présence des couches N2000 et ZNIEFF dans le projet.
