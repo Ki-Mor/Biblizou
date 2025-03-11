@@ -275,13 +275,13 @@ df_status = df_status.merge(global_df[['CD_Ref', 'Commune', 'Année_DernièreObs
                             left_on='id', right_on='CD_Ref', how='left')
 
 
-df_status_clean = df_status.fillna(0)
-print(df_status_clean.dtypes)
-print(df_status_clean.head(10))
+# df_status_clean = df_status.fillna(0)
+# print(df_status_clean.dtypes)
+print(df_status.head(200))
 
-
-df_status_clean['CD_Ref'] = pd.to_numeric(df_status_clean['CD_Ref'], errors='coerce').astype('Int64')
-df_status_clean['Année_DernièreObservation'] = pd.to_numeric(df_status_clean['Année_DernièreObservation'], errors='coerce').astype('Int64')
+#
+# df_status_clean['CD_Ref'] = pd.to_numeric(df_status_clean['CD_Ref'], errors='coerce').astype('Int64')
+# df_status_clean['Année_DernièreObservation'] = pd.to_numeric(df_status_clean['Année_DernièreObservation'], errors='coerce').astype('Int64')
 
 
 # print(f'NOM_COMPLET {df_status['NOM_COMPLET'].isna().sum()}')
@@ -297,24 +297,24 @@ df_status_clean['Année_DernièreObservation'] = pd.to_numeric(df_status_clean['
 # print(df_status[df_status['CD_Ref'].isna()])
 
 
-# Pivot table pour les années par commune
-pivot_df_commune = df_status_clean.pivot_table(
-    index=['CD_Ref', 'NOM_COMPLET'],
-    columns='Commune',
-    values='Année_DernièreObservation',
-    aggfunc='max',
-    fill_value=''
-)
-
-
-# Pivot table pour les années par status
-pivot_df_status = df_status_clean.pivot_table(
-    index=['CD_Ref', 'NOM_COMPLET'],
-    columns='statusTypeName',
-    values=['statusCode'],
-    aggfunc='first',
-    fill_value=''
-)
-
-print(pivot_df_commune.head(25))
-print(pivot_df_status.head(25))
+# # Pivot table pour les années par commune
+# pivot_df_commune = df_status_clean.pivot_table(
+#     index=['CD_Ref', 'NOM_COMPLET'],
+#     columns='Commune',
+#     values='Année_DernièreObservation',
+#     aggfunc='max',
+#     fill_value=''
+# )
+#
+#
+# # Pivot table pour les années par status
+# pivot_df_status = df_status_clean.pivot_table(
+#     index=['CD_Ref', 'NOM_COMPLET'],
+#     columns='statusTypeName',
+#     values=['statusCode'],
+#     aggfunc='first',
+#     fill_value=''
+# )
+#
+# print(pivot_df_commune.head(25))
+# print(pivot_df_status.head(25))
