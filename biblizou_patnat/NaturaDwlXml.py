@@ -3,7 +3,7 @@ Auteur : ExEco Environnement - François Botcazou
 Date de création : 2025/02
 Dernière mise à jour : 2025/03
 Version : 1.0
-Nom : NaturaXmlToDocx.py
+Nom : NaturaDwlXml.py
 Groupe : Biblizou_PatNat
 Description : Module pour télécharger les xml des zonages natura2000 dans un périmètre donné.
 Dépendances :
@@ -22,112 +22,87 @@ import logging
 from qgis.core import (
     QgsProject,
     QgsVectorLayer,
-    QgsFeatureRequest
+    QgsFeatureRequest,
+    QgsMessageLog
 )
+from PyQt5.QtWidgets import QInputDialog, QMessageBox
 
-# Récupérer les couches Patrinat
-patrinat_sic = QgsProject.instance().mapLayersByName("Patrinat : SIC")[0]
-patrinat_zps = QgsProject.instance().mapLayersByName("Patrinat : ZPS")[0]
+class NaturaDwlXml:
+    def __init__(self):
+        """Initialisation de la classe."""
+        self.patrinat_sic = QgsProject.instance().mapLayersByName("Patrinat : SIC")[0]
+        self.patrinat_zps = QgsProject.instance().mapLayersByName("Patrinat : ZPS")[0]
+        self.ae_eloignee = QgsProject.instance().mapLayersByName("AE_eloignee")[0]
+        self.id_mnhn_sic = []
+        self.id_mnhn_zps = []
 
+    def selectionner_et_stocker(self, couche_source, liste_stockage):
+        """Sélectionne les entités intersectant AE_eloignee et stocke leurs ID."""
+        if couche_source and self.ae_eloignee:
+            geom_ref = [f.geometry() for f in self.ae_eloignee.getFeatures()]
+            couche_source.removeSelection()
+            ids_selectionnes = []
 
-# Récupérer la couche de référence
-ae_eloignee = QgsProject.instance().mapLayersByName("AE_eloignee")[0]
+            for feature in couche_source.getFeatures():
+                if any(feature.geometry().intersects(g) for g in geom_ref):
+                    ids_selectionnes.append(feature.id())
+                    liste_stockage.append(feature["id_mnhn"])
 
-# Listes pour stocker les id_mnhn des entités sélectionnées
-id_mnhn_sic = []
-id_mnhn_zps = []
-
-# Fonction de sélection et récupération des id_mnhn
-def selectionner_et_stocker(couche_source, liste_stockage):
-    if couche_source and ae_eloignee:
-        geom_ref = [f.geometry() for f in ae_eloignee.getFeatures()]
-        couche_source.removeSelection()
-        ids_selectionnes = []
-
-        for feature in couche_source.getFeatures():
-            if any(feature.geometry().intersects(g) for g in geom_ref):
-                ids_selectionnes.append(feature.id())
-                liste_stockage.append(feature["id_mnhn"])
-
-        if ids_selectionnes:
-            couche_source.selectByIds(ids_selectionnes)
-            print(f"{len(ids_selectionnes)} entités sélectionnées dans {couche_source.name()}.")
+            if ids_selectionnes:
+                couche_source.selectByIds(ids_selectionnes)
+                QgsMessageLog.logMessage(f"{len(ids_selectionnes)} entités sélectionnées dans {couche_source.name()}.", "Biblizou")
+            else:
+                QgsMessageLog.logMessage(f"Aucune entité sélectionnée dans {couche_source.name()}.", "Biblizou")
         else:
-            print(f"Aucune entité sélectionnée dans {couche_source.name()}.")
-    else:
-        print(f"La couche {couche_source.name()} ou AE_eloignee est introuvable.")
+            QgsMessageLog.logMessage(f"La couche {couche_source.name()} ou AE_eloignee est introuvable.", "Biblizou")
 
-# Appliquer la sélection sur chaque couche Patrinat
-selectionner_et_stocker(patrinat_sic, id_mnhn_sic)
-selectionner_et_stocker(patrinat_zps, id_mnhn_zps)
+    def download_file(self, url, save_path, retries=3):
+        """Télécharge un fichier XML avec gestion des erreurs."""
+        attempt = 0
+        while attempt < retries:
+            try:
+                response = requests.get(url)
+                response.raise_for_status()
 
-# Afficher les résultats
-print("ID MNHN sélectionnés :")
-print("SIC :", id_mnhn_sic)
-print("ZPS :", id_mnhn_zps)
+                with open(save_path, 'wb') as f:
+                    f.write(response.content)
+                QgsMessageLog.logMessage(f"Fichier téléchargé avec succès : {save_path}", "Biblizou")
+                return True
+            except requests.exceptions.RequestException as e:
+                attempt += 1
+                time.sleep(2 ** attempt)
+        QgsMessageLog.logMessage(f"Échec du téléchargement après {retries} tentatives : {url}", "Biblizou", level=2)
+        return False
 
-def download_file(url, save_path, retries=3):
-    attempt = 0
-    while attempt < retries:
-        try:
-            response = requests.get(url)
-            response.raise_for_status()  # Vérifie si la requête a réussi (status code 200)
+    def construct_url_and_download(self, natura_ids, download_folder):
+        """Construit les URLs et télécharge les fichiers XML correspondants."""
+        if not natura_ids:
+            QgsMessageLog.logMessage("Aucun identifiant Natura trouvé.", "Biblizou")
+            return
 
-            with open(save_path, 'wb') as f:
-                f.write(response.content)
-            logging.info(f"Fichier téléchargé avec succès : {save_path}")
-            return True  # Le téléchargement a réussi
+        for natura_id in natura_ids:
+            url = f"https://inpn.mnhn.fr/docs/natura2000/fsdxml/{natura_id}.xml"
+            save_path = os.path.join(download_folder, f"{natura_id}.xml")
+            self.download_file(url, save_path)
 
-        except requests.exceptions.HTTPError as e:
-            logging.error(f"Erreur HTTP lors du téléchargement de {url}: {e}")
-            return False  # Si c'est une erreur HTTP, on retourne False
+    def run(self):
+        """Point d'entrée principal du module."""
+        download_folder, ok = QInputDialog.getText(None, "Chemin vers le dossier de travail", "Copier/coller le chemin")
+        if not ok:
+            QgsMessageLog.logMessage("L'utilisateur a annulé la saisie du chemin.", "Biblizou", level=2)
+            return
 
-        except requests.exceptions.RequestException as e:
-            attempt += 1
-            logging.warning(f"Erreur réseau lors du téléchargement de {url}: {e}. Tentative {attempt} sur {retries}.")
-            time.sleep(2 ** attempt)  # Augmentation exponentielle du délai d'attente
+        if not os.path.isdir(download_folder):
+            QMessageBox.warning(None, "Erreur", f"Le dossier {download_folder} n'existe pas.")
+            return
 
-    logging.error(f"Échec du téléchargement après {retries} tentatives : {url}")
-    return False  # Après épuisement des tentatives, on retourne False
+        self.selectionner_et_stocker(self.patrinat_sic, self.id_mnhn_sic)
+        self.selectionner_et_stocker(self.patrinat_zps, self.id_mnhn_zps)
+        self.construct_url_and_download(self.id_mnhn_sic + self.id_mnhn_zps, download_folder)
 
-def construct_url_and_download(n2000_ids, download_folder):
-    if not n2000_ids:
-        logging.warning("Aucun identifiant ZNIEFF trouvé.")
-        return
+# Pour exécuter le module dans QGIS
+def run_module():
+    module = NaturaDwlXml()
+    module.run()
 
-    successful_downloads = 0
-
-    for n2000_id in n2000_ids:
-        url = f"https://inpn.mnhn.fr/docs/natura2000/fsdxml/{n2000_id}.xml"
-        save_path = os.path.join(download_folder, f"{n2000_id}.xml")
-        if download_file(url, save_path):
-            successful_downloads += 1
-
-    if successful_downloads > 0:
-        logging.info(f"\n{successful_downloads} fichiers téléchargés avec succès.")
-    else:
-        logging.warning("\nAucun fichier n'a été téléchargé.")
-
-def main():
-    logging.info("La fonction main() a été appelée.")
-    """
-    Point d'entrée principal du script.
-    Demande à l'utilisateur de spécifier le chemin du dossier contenant le fichier TXT.
-    Le fichier input_xml_n2000_download_list.txt doit être trouvé automatiquement dans ce dossier.
-    """
-    # Demander à l'utilisateur de spécifier l'emplacement du dossier contenant le fichier TXT
-    download_folder, ok = QInputDialog.getText(None, "Chemin vers le dossier de travail", "Copier/coller le chemin")
-    if not ok:
-        logging.error("L'utilisateur a annulé la saisie du chemin.")
-        return
-
-    # Vérifier si le dossier existe
-    if not os.path.isdir(download_folder):
-        logging.error(f"Le dossier {download_folder} n'existe pas.")
-        return
-
-
-    # Appeler la fonction pour construire les URLs et télécharger les fichiers
-    construct_url_and_download(id_mnhn_sic + id_mnhn_zps, download_folder)
-
-main()
+run_module()
