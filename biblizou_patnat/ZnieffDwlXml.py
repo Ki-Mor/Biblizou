@@ -15,6 +15,8 @@ Utilisation :
     dossier contenant des fichiers XML et génère un fichier DOCX récapitulatif.
 """
 
+#TODO : AE_eloignee doit être insérer par un Qwidget dans la main window
+
 import os
 import requests
 import time
