@@ -1,8 +1,18 @@
 """
-Author : ExEco Environnement
-Edition date : 2025/02
-Name : 11_znieff_xml_download_list
-Group : Biblio_PatNat
+Auteur : ExEco Environnement - François Botcazou
+Date de création : 2025/02
+Dernière mise à jour : 2025/03
+Version : 1.0
+Nom : NaturaXmlToDocx.py
+Groupe : Biblizou_PatNat
+Description : Module pour télécharger les xml des zonages natura2000 dans un périmètre donné.
+Dépendances :
+    - Python 3.x
+    - QGIS (QgsMessageBar, QgsMessageLog)
+
+Utilisation :
+    Ce module doit être appelé depuis une extension QGIS. Il prend en entrée un
+    dossier contenant des fichiers XML et génère un fichier DOCX récapitulatif.
 """
 
 import os
