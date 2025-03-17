@@ -27,6 +27,7 @@ from qgis.core import (
     QgsFeatureRequest,
     QgsMessageLog
 )
+from qgis.gui import QgsMapLayerComboBox
 from PyQt5.QtWidgets import QInputDialog, QMessageBox
 
 class NaturaDwlXml:
@@ -34,9 +35,21 @@ class NaturaDwlXml:
         """Initialisation de la classe."""
         self.patrinat_sic = QgsProject.instance().mapLayersByName("Patrinat : SIC")[0]
         self.patrinat_zps = QgsProject.instance().mapLayersByName("Patrinat : ZPS")[0]
-        self.ae_eloignee = QgsProject.instance().mapLayersByName("AE_eloignee")[0]
         self.id_mnhn_sic = []
         self.id_mnhn_zps = []
+        self.ae_eloignee = None
+
+
+    def select_layer(self):
+        """Demande à l'utilisateur de sélectionner une couche vectorielle dans le projet."""
+        layers = [layer.name() for layer in QgsProject.instance().mapLayers().values()]
+        selected_layer, ok = QInputDialog.getItem(None, "Sélection de la couche",
+                                                  "Choisissez une couche de référence :",
+                                                  layers, 0, False)
+        if ok and selected_layer:
+            self.ae_eloignee = QgsProject.instance().mapLayersByName(selected_layer)[0]
+        else:
+            QMessageBox.warning(None, "Avertissement", "Aucune couche sélectionnée.")
 
     def selectionner_et_stocker(self, couche_source, liste_stockage):
         """Sélectionne les entités intersectant AE_eloignee et stocke leurs ID."""
@@ -89,6 +102,10 @@ class NaturaDwlXml:
 
     def run(self):
         """Point d'entrée principal du module."""
+        self.select_layer()
+        if not self.ae_eloignee:
+            QMessageBox.warning(None, "Erreur", "Aucune couche de référence sélectionnée.")
+            return
         download_folder, ok = QInputDialog.getText(None, "Chemin vers le dossier de travail", "Copier/coller le chemin")
         if not ok:
             QgsMessageLog.logMessage("L'utilisateur a annulé la saisie du chemin.", "Biblizou", level=2)

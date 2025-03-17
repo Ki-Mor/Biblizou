@@ -15,18 +15,18 @@ Utilisation :
     dossier contenant des fichiers XML et génère un fichier DOCX récapitulatif.
 """
 
-#TODO : AE_eloignee doit être insérer par un Qwidget dans la main window
+#TODO : AE_eloignee doit être insérée par un Qwidget dans la main window
 
 import os
 import requests
 import time
-import logging
 from qgis.core import (
     QgsProject,
     QgsVectorLayer,
     QgsFeatureRequest,
     QgsMessageLog
 )
+from qgis.gui import QgsMapLayerComboBox
 from PyQt5.QtWidgets import QInputDialog, QMessageBox
 
 class ZnieffDwlXml:
@@ -34,9 +34,20 @@ class ZnieffDwlXml:
         """Initialisation de la classe."""
         self.patrinat_zn1 = QgsProject.instance().mapLayersByName("Patrinat : ZNIEFF1")[0]
         self.patrinat_zn2 = QgsProject.instance().mapLayersByName("Patrinat : ZNIEFF2")[0]
-        self.ae_eloignee = QgsProject.instance().mapLayersByName("AE_eloignee")[0]
         self.id_mnhn_zn1 = []
         self.id_mnhn_zn2 = []
+        self.ae_eloignee = None
+
+    def select_layer(self):
+        """Demande à l'utilisateur de sélectionner une couche vectorielle dans le projet."""
+        layers = [layer.name() for layer in QgsProject.instance().mapLayers().values()]
+        selected_layer, ok = QInputDialog.getItem(None, "Sélection de la couche",
+                                                  "Choisissez une couche de référence :",
+                                                  layers, 0, False)
+        if ok and selected_layer:
+            self.ae_eloignee = QgsProject.instance().mapLayersByName(selected_layer)[0]
+        else:
+            QMessageBox.warning(None, "Avertissement", "Aucune couche sélectionnée.")
 
     def selectionner_et_stocker(self, couche_source, liste_stockage):
         """Sélectionne les entités intersectant AE_eloignee et stocke leurs ID."""
@@ -70,7 +81,7 @@ class ZnieffDwlXml:
                     f.write(response.content)
                 QgsMessageLog.logMessage(f"Fichier téléchargé avec succès : {save_path}", "Biblizou")
                 return True
-            except requests.exceptions.RequestException as e:
+            except requests.exceptions.RequestException:
                 attempt += 1
                 time.sleep(2 ** attempt)
         QgsMessageLog.logMessage(f"Échec du téléchargement après {retries} tentatives : {url}", "Biblizou", level=2)
@@ -89,6 +100,11 @@ class ZnieffDwlXml:
 
     def run(self):
         """Point d'entrée principal du module."""
+        self.select_layer()
+        if not self.ae_eloignee:
+            QMessageBox.warning(None, "Erreur", "Aucune couche de référence sélectionnée.")
+            return
+
         download_folder, ok = QInputDialog.getText(None, "Chemin vers le dossier de travail", "Copier/coller le chemin")
         if not ok:
             QgsMessageLog.logMessage("L'utilisateur a annulé la saisie du chemin.", "Biblizou", level=2)
