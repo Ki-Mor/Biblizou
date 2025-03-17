@@ -12,10 +12,9 @@ Dépendances :
 
 Utilisation :
     Ce module doit être appelé depuis une extension QGIS. Il prend en entrée un
-    dossier contenant des fichiers XML et génère un fichier DOCX récapitulatif.
+    dossier et y télécharge tous les fichiers XML.
 """
 
-#TODO : AE_eloignee doit être insérer par un Qwidget dans la main window
 
 import os
 import requests
