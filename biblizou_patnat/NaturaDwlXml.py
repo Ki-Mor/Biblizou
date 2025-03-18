@@ -24,7 +24,10 @@ from qgis.core import (
     QgsProject,
     QgsVectorLayer,
     QgsFeatureRequest,
-    QgsMessageLog
+    QgsMessageLog,
+    QgsCoordinateTransform,
+    QgsProject,
+    QgsGeometry
 )
 from qgis.gui import QgsMapLayerComboBox
 from PyQt5.QtWidgets import QInputDialog, QMessageBox
@@ -51,24 +54,41 @@ class NaturaDwlXml:
             QMessageBox.warning(None, "Avertissement", "Aucune couche sélectionnée.")
 
     def selectionner_et_stocker(self, couche_source, liste_stockage):
-        """Sélectionne les entités intersectant AE_eloignee et stocke leurs ID."""
-        if couche_source and self.ae_eloignee:
-            geom_ref = [f.geometry() for f in self.ae_eloignee.getFeatures()]
-            couche_source.removeSelection()
-            ids_selectionnes = []
-
-            for feature in couche_source.getFeatures():
-                if any(feature.geometry().intersects(g) for g in geom_ref):
-                    ids_selectionnes.append(feature.id())
-                    liste_stockage.append(feature["id_mnhn"])
-
-            if ids_selectionnes:
-                couche_source.selectByIds(ids_selectionnes)
-                QgsMessageLog.logMessage(f"{len(ids_selectionnes)} entités sélectionnées dans {couche_source.name()}.", "Biblizou")
-            else:
-                QgsMessageLog.logMessage(f"Aucune entité sélectionnée dans {couche_source.name()}.", "Biblizou")
-        else:
+        """Sélectionne les entités intersectant AE_eloignee et stocke leurs ID, en optimisant la reprojection."""
+        if not couche_source or not self.ae_eloignee:
             QgsMessageLog.logMessage(f"La couche {couche_source.name()} ou AE_eloignee est introuvable.", "Biblizou")
+            return
+
+        # Définir la transformation de coordonnées
+        transform = QgsCoordinateTransform(self.ae_eloignee.crs(), couche_source.crs(), QgsProject.instance())
+
+        # Fusionner toutes les géométries de AE_eloignee en une seule
+        geometries = [f.geometry() for f in self.ae_eloignee.getFeatures()]
+        if not geometries:
+            QgsMessageLog.logMessage(f"Aucune géométrie trouvée dans AE_eloignee.", "Biblizou")
+            return
+
+        geom_ref = QgsGeometry.unaryUnion(geometries)
+        geom_ref.transform(transform)  # Transformer une seule géométrie fusionnée
+
+        couche_source.removeSelection()
+        ids_selectionnes = []
+
+        # Effectuer une sélection spatiale avec une boîte englobante pour optimiser
+        request = QgsFeatureRequest().setFilterRect(geom_ref.boundingBox())
+
+        for feature in couche_source.getFeatures(request):
+            if feature.geometry().intersects(geom_ref):
+                ids_selectionnes.append(feature.id())
+                liste_stockage.append(feature["id_mnhn"])
+
+        if ids_selectionnes:
+            couche_source.selectByIds(ids_selectionnes)
+            QgsMessageLog.logMessage(f"{len(ids_selectionnes)} entités sélectionnées dans {couche_source.name()}.",
+                                     "Biblizou")
+        else:
+            QgsMessageLog.logMessage(f"Aucune entité sélectionnée dans {couche_source.name()}.", "Biblizou")
+
 
     def download_file(self, url, save_path, retries=3):
         """Télécharge un fichier XML avec gestion des erreurs."""
