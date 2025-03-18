@@ -1,127 +1,242 @@
-"""
-Auteur : ExEco Environnement - François Botcazou
-Date de création : 2025/02
-Dernière mise à jour : 2025/03
-Version : 1.0
-Nom : NaturaDwlXml.py
-Groupe : Biblizou_PatNat
-Description : Module pour télécharger les xml des zonages natura2000 dans un périmètre donné.
-Dépendances :
-    - Python 3.x
-    - QGIS (QgsMessageBar, QgsMessageLog)
+"""Script Ecalluna en cours de travail"""
 
-Utilisation :
-    Ce module doit être appelé depuis une extension QGIS. Il prend en entrée un
-    dossier contenant des fichiers XML et génère un fichier DOCX récapitulatif.
-"""
 
-#TODO : AE_eloignee doit être insérer par un Qwidget dans la main window
-
-import os
+from typing import List, Tuple
+import pandas as pd
 import requests
+import re
+from pathlib import Path
+import concurrent.futures
 import time
 import logging
-from qgis.core import (
-    QgsProject,
-    QgsVectorLayer,
-    QgsFeatureRequest,
-    QgsMessageLog
-)
-from qgis.gui import QgsMapLayerComboBox
-from PyQt5.QtWidgets import QInputDialog, QMessageBox
+from threading import Lock  # Importation du verrou pour synchroniser les mises à jour
 
-class NaturaDwlXml:
-    def __init__(self):
-        """Initialisation de la classe."""
-        self.patrinat_sic = QgsProject.instance().mapLayersByName("Patrinat : SIC")[0]
-        self.patrinat_zps = QgsProject.instance().mapLayersByName("Patrinat : ZPS")[0]
-        self.id_mnhn_sic = []
-        self.id_mnhn_zps = []
-        self.ae_eloignee = None
+# Configuration des logs
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
+# Cache des résultats de la recherche Fuzzy (utilisation d'un cache global)
+cache_fuzzy_results = {}
+cache_taxref_results = {}
+lock = Lock()  # Création d'un verrou pour éviter les accès concurrents au DataFrame
+session = requests.Session()  # Session globale pour réutiliser les connexions HTTP
+# insee = {'Melgven' : 29146, 'Rosporden' : 29241, 'Elliant' : 29049, 'Saint-Yvi' :29272}
 
-    def select_layer(self):
-        """Demande à l'utilisateur de sélectionner une couche vectorielle dans le projet."""
-        layers = [layer.name() for layer in QgsProject.instance().mapLayers().values()]
-        selected_layer, ok = QInputDialog.getItem(None, "Sélection de la couche",
-                                                  "Choisissez une couche de référence :",
-                                                  layers, 0, False)
-        if ok and selected_layer:
-            self.ae_eloignee = QgsProject.instance().mapLayersByName(selected_layer)[0]
-        else:
-            QMessageBox.warning(None, "Avertissement", "Aucune couche sélectionnée.")
+# options d'affichage pandas
+pd.set_option('display.max_columns', None)
+pd.set_option('display.max_rows', None)
+pd.set_option('display.width', None)
+pd.set_option('display.max_colwidth', None)
 
-    def selectionner_et_stocker(self, couche_source, liste_stockage):
-        """Sélectionne les entités intersectant AE_eloignee et stocke leurs ID."""
-        if couche_source and self.ae_eloignee:
-            geom_ref = [f.geometry() for f in self.ae_eloignee.getFeatures()]
-            couche_source.removeSelection()
-            ids_selectionnes = []
+# Dossier contenant les fichiers CSV
+folder_path = r"\\192.168.1.100\ExEco_Env\Affaires_en_cours\REIE_2407_ZA les Costils Les Pieux_50_(SA2E et V.Simont)\DATA\XECO_PatNat\ecalluna"
+# folder_path = input("Entrez le chemin du dossier contenant les fichiers XML : ")
 
-            for feature in couche_source.getFeatures():
-                if any(feature.geometry().intersects(g) for g in geom_ref):
-                    ids_selectionnes.append(feature.id())
-                    liste_stockage.append(feature["id_mnhn"])
+# Vérifier si le dossier existe
+if not Path(folder_path).exists():
+    raise OSError(f"Le dossier spécifié '{folder_path}' n'existe pas ou n'est pas accessible.")
 
-            if ids_selectionnes:
-                couche_source.selectByIds(ids_selectionnes)
-                QgsMessageLog.logMessage(f"{len(ids_selectionnes)} entités sélectionnées dans {couche_source.name()}.", "Biblizou")
+# Lister tous les fichiers CSV dans le dossier
+csv_files = Path(folder_path).glob("*.csv")
+
+# DataFrame global pour accumuler toutes les données
+global_df = pd.DataFrame()
+
+# Traiter chaque fichier CSV
+def process_csv(file_path: Path) -> pd.DataFrame:
+    try:
+        # Lire le fichier CSV avec pandas
+        df = pd.read_csv(file_path, skiprows=range(0, 1), sep=";", on_bad_lines='skip', encoding='utf-8')
+    except Exception as e:
+        logging.error(f"Erreur lors de la lecture du fichier {file_path.name}: {e}")
+        return pd.DataFrame()  # Retourner un DataFrame vide en cas d'erreur
+
+    # Vérifier la présence des colonnes requises et les gérer
+    if 'NomTaxCBNB' not in df.columns:
+        logging.warning(f"Colonne 'NomTaxCBNB' absente dans {file_path.name}, remplacement par des valeurs vides.")
+        df['NomTaxCBNB'] = ""
+    if 'Année_DernièreObservation' not in df.columns:
+        logging.warning(f"Colonne 'Année_DernièreObservation' absente dans {file_path.name}, remplacement par NaN.")
+        df['Année_DernièreObservation'] = pd.NA
+    if 'CD_Ref' not in df.columns:
+        logging.warning(f"Colonne 'CD_Ref' absente dans {file_path.name}, remplacement par 0.")
+        df['CD_Ref'] = 0
+
+    # Extraire les colonnes spécifiques
+    NomTaxCBNB = df['NomTaxCBNB'].tolist()
+    AnneeDerniereObservation = pd.to_numeric(df['Année_DernièreObservation'], errors='coerce').astype('Int64')
+    CD_Ref = df['CD_Ref'].fillna(0).astype(int).tolist()
+
+    # Extraire le nom de la commune à partir du nom du fichier
+    file_name = file_path.name
+    match = re.search(r'_([^_]+)\.csv$', file_name)
+
+    extracted_commune = match.group(1) if match else "Inconnu"
+
+    # Ajouter les colonnes supplémentaires à df
+    data = {
+        'NomTaxCBNB': NomTaxCBNB,
+        'Année_DernièreObservation': AnneeDerniereObservation,
+        'CD_Ref': CD_Ref,
+        'Commune': extracted_commune,
+        'Obs': 'CBN Brest'
+    }
+
+    return pd.DataFrame(data)
+
+# Charger les données depuis les fichiers CSV
+for file_path in csv_files:
+    df = process_csv(file_path)
+    if not df.empty:
+        global_df = pd.concat([global_df, df], ignore_index=True)
+
+# Fonction pour enrichir global_df
+def process_row(index, row, cache):
+    if pd.notna(row['NomTaxCBNB']) and row['NomTaxCBNB'].strip() != "":
+        scientific_name, reference_id = fuzzy_match(row['NomTaxCBNB'])
+        with lock:
+            global_df.at[index, 'CD_Ref'] = reference_id
+        logging.info(f"Modifications pour l'index {index}: {row['NomTaxCBNB']} -> {scientific_name}, {reference_id}")
+
+# Fonction pour corriger global_df
+def correct_CD_Ref_data():
+    global global_df
+
+    # Appliquer la parallélisation pour remplir le CD_Ref avec un cache global
+    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+        futures = [
+            executor.submit(process_row, index, row, cache_fuzzy_results)
+            for index, row in global_df.iterrows()
+        ]
+        for future in concurrent.futures.as_completed(futures):
+            future.result()
+
+def fuzzy_match(nom_tax: str) -> Tuple[str, int]:
+    if nom_tax in cache_fuzzy_results:
+        return cache_fuzzy_results[nom_tax]
+
+    word = nom_tax.split()
+    genus, specie = word[0], word[1] if len(word) > 1 else ""
+    url = f'https://taxref.mnhn.fr/api/taxa/fuzzyMatch?term={genus}%20{specie}'
+
+    for attempt in range(5):
+        try:
+            response = session.get(url, headers={'accept': "application/hal+json;version=1"}, timeout=20)
+            if response.status_code == 200:
+                data = response.json()
+                taxa = data.get('_embedded', {}).get('taxa', [])
+                if taxa:
+                    result = (taxa[0].get("scientificName", ""), int(taxa[0].get("referenceId", 0)))
+                    cache_fuzzy_results[nom_tax] = result
+                    return result
+            return "", 0
+        except requests.RequestException as e:
+            logging.warning(f"Erreur API pour {nom_tax}, tentative {attempt + 1}: {e}")
+            time.sleep(2 ** attempt)
+    return "", 0
+
+def fetch_taxref_data(CD_Ref, cache={}):
+    # Vérifier si les données sont déjà en cache
+    if CD_Ref in cache:
+        return cache[CD_Ref]
+
+    # URL de l'API avec cd_nom comme identifiant
+    url = f"https://taxref.mnhn.fr/api/taxa/{CD_Ref}"
+
+    # Définir les headers pour l'API
+    headers = {"accept": "application/hal+json;version=1"}
+
+    try:
+        # Faire la requête GET
+        try:
+            response = session.get(url, headers=headers, timeout=30)
+            response.raise_for_status()  # Déclenche une exception pour les erreurs HTTP
+        except requests.Timeout:
+            logging.error(f"Timeout lors de la requête pour {CD_Ref}")
+            return {'REGNE': '', 'GROUPE': '', 'NOM_COMPLET': '', 'NOM_VERN': ''}
+        except requests.RequestException as e:
+            logging.error(f"Erreur API pour {CD_Ref}: {e}")
+            return {'REGNE': '', 'GROUPE': '', 'NOM_COMPLET': '', 'NOM_VERN': ''}
+
+        # Vérifier que la réponse est correcte (code 200)
+        if response.status_code == 200:
+            data = response.json()
+
+            # Vérifier si la réponse contient des informations
+            if data:
+                # Récupérer les informations pertinentes directement dans la réponse
+                result = {
+                    'REGNE': data.get('vernacularKingdomName', ''),
+                    'GROUPE': data.get('vernacularGroup2', ''),
+                    'NOM_COMPLET': data.get('fullName', ''),
+                    'NOM_VERN': data.get('frenchVernacularName', '')
+                }
+
+                # Mettre les données dans le cache
+                cache[CD_Ref] = result
+                return result
             else:
-                QgsMessageLog.logMessage(f"Aucune entité sélectionnée dans {couche_source.name()}.", "Biblizou")
+                print(f"Aucun taxon trouvé pour {CD_Ref}.")
+                return {'REGNE': '', 'GROUPE': '', 'NOM_COMPLET': '', 'NOM_VERN': ''}
         else:
-            QgsMessageLog.logMessage(f"La couche {couche_source.name()} ou AE_eloignee est introuvable.", "Biblizou")
+            print(f"Erreur API pour {CD_Ref}: {response.status_code}")
+            return {'REGNE': '', 'GROUPE': '', 'NOM_COMPLET': '', 'NOM_VERN': ''}
+    except Exception as e:
+        print(f"Erreur lors de l'interrogation de l'API pour {CD_Ref}: {e}")
+        return {'REGNE': '', 'GROUPE': '', 'NOM_COMPLET': '', 'NOM_VERN': ''}
 
-    def download_file(self, url, save_path, retries=3):
-        """Télécharge un fichier XML avec gestion des erreurs."""
-        attempt = 0
-        while attempt < retries:
-            try:
-                response = requests.get(url)
-                response.raise_for_status()
+def enrich_taxref_data():
+    global global_df
+    logging.info("Enrichissement du DataFrame avec les données de TaxRef :")
 
-                with open(save_path, 'wb') as f:
-                    f.write(response.content)
-                QgsMessageLog.logMessage(f"Fichier téléchargé avec succès : {save_path}", "Biblizou")
-                return True
-            except requests.exceptions.RequestException as e:
-                attempt += 1
-                time.sleep(2 ** attempt)
-        QgsMessageLog.logMessage(f"Échec du téléchargement après {retries} tentatives : {url}", "Biblizou", level=2)
-        return False
+    # Appliquer la parallélisation pour enrichir global_df
+    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+        futures = [
+            executor.submit(enrich_row, index, row)
+            for index, row in global_df.iterrows()
+            if row['CD_Ref'] != 0 and row['CD_Ref'] not in cache_taxref_results
+        ]
+        for future in concurrent.futures.as_completed(futures):
+            future.result()
 
-    def construct_url_and_download(self, natura_ids, download_folder):
-        """Construit les URLs et télécharge les fichiers XML correspondants."""
-        if not natura_ids:
-            QgsMessageLog.logMessage("Aucun identifiant Natura trouvé.", "Biblizou")
-            return
+def enrich_row(index, row):
+    # Récupérer les données de TaxRef pour le CD_Ref donné
+    taxref_data = fetch_taxref_data(row['CD_Ref'], cache_taxref_results)
 
-        for natura_id in natura_ids:
-            url = f"https://inpn.mnhn.fr/docs/natura2000/fsdxml/{natura_id}.xml"
-            save_path = os.path.join(download_folder, f"{natura_id}.xml")
-            self.download_file(url, save_path)
+    # Couper NOM_VERN avant la première virgule
+    nom_vern = taxref_data['NOM_VERN']
+    if isinstance(nom_vern, str) and ',' in nom_vern:
+        taxref_data['NOM_VERN'] = nom_vern.split(',')[0].strip()
 
-    def run(self):
-        """Point d'entrée principal du module."""
-        self.select_layer()
-        if not self.ae_eloignee:
-            QMessageBox.warning(None, "Erreur", "Aucune couche de référence sélectionnée.")
-            return
-        download_folder, ok = QInputDialog.getText(None, "Chemin vers le dossier de travail", "Copier/coller le chemin")
-        if not ok:
-            QgsMessageLog.logMessage("L'utilisateur a annulé la saisie du chemin.", "Biblizou", level=2)
-            return
+    # Mettre à jour les colonnes correspondantes dans global_df
+    with lock:
+        global_df.at[index, 'REGNE'] = taxref_data['REGNE']
+        global_df.at[index, 'GROUPE'] = taxref_data['GROUPE']
+        global_df.at[index, 'NOM_COMPLET'] = taxref_data['NOM_COMPLET']
+        global_df.at[index, 'NOM_VERN'] = taxref_data['NOM_VERN']
 
-        if not os.path.isdir(download_folder):
-            QMessageBox.warning(None, "Erreur", f"Le dossier {download_folder} n'existe pas.")
-            return
+    # Ajouter un message de log pour indiquer que la ligne a été traitée
+    logging.info(f"Ligne {index} traitée: CD_Ref={row['CD_Ref']}, REGNE={taxref_data['REGNE']}, GROUPE={taxref_data['GROUPE']}, NOM_COMPLET={taxref_data['NOM_COMPLET']}, NOM_VERN={taxref_data['NOM_VERN']}")
 
-        self.selectionner_et_stocker(self.patrinat_sic, self.id_mnhn_sic)
-        self.selectionner_et_stocker(self.patrinat_zps, self.id_mnhn_zps)
-        self.construct_url_and_download(self.id_mnhn_sic + self.id_mnhn_zps, download_folder)
+# Pipeline de traitement
+def process_data():
+    logging.info("Début du traitement des données.")
+    correct_CD_Ref_data()
+    enrich_taxref_data()
+    logging.info("Traitement des données terminé.")
 
-# Pour exécuter le module dans QGIS
-def run_module():
-    module = NaturaDwlXml()
-    module.run()
+process_data()
+print(global_df.head(25))
 
-run_module()
+print(global_df.dtypes)  # Vérifie les types de colonnes
+print(global_df.head())  # Vérifie l'aperçu des données
+print(global_df['Année_DernièreObservation'].unique())  # Remplace par le bon nom de colonne
+
+pivot_df_commune = global_df.pivot_table(
+    index=['CD_Ref', 'NOM_COMPLET'],
+    columns=['Commune'],
+    values='Année_DernièreObservation',  # Assure-toi que cette colonne est bien numérique
+    aggfunc='max',  # Ou autre fonction d'agrégation appropriée
+    fill_value=''
+)
+
+print(pivot_df_commune)
