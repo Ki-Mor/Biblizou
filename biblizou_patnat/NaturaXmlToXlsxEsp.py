@@ -30,7 +30,6 @@ from openpyxl.styles import Alignment, Border, Side, PatternFill, Font
 import time
 from collections import defaultdict
 
-
 class NaturaXmlToXlsxEsp:
     def __init__(self, iface):
         self.iface = iface
@@ -149,3 +148,10 @@ class NaturaXmlToXlsxEsp:
         except Exception as e:
             QgsMessageLog.logMessage(f"Erreur inattendue: {e}", "Biblizou", Qgis.Critical)
             return pd.DataFrame(columns=['REGNE', 'GROUPE', 'CD_NOM', 'NOM', 'NOM_COMPLET', 'NOM_VERN']), "", ""
+
+# Pour exécuter le module dans QGIS
+def run_module(iface):
+    module = NaturaXmlToXlsxEsp(iface)
+    module.run()
+
+run_module(iface)
