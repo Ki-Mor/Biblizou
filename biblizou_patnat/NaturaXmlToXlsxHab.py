@@ -111,3 +111,10 @@ class NaturaXmlToXlsxHab:
             iface.messageBar().pushMessage("Succès", f"Fichier Excel généré : {excel_file}", level=Qgis.Success, duration=10)
         except Exception as e:
             iface.messageBar().pushMessage("Erreur", f"Impossible d'écrire le fichier Excel : {e}", level=Qgis.Critical, duration=10)
+
+# Pour exécuter le module dans QGIS
+def run_module(iface):
+    module = NaturaXmlToXlsxHab(iface)
+    module.run()
+
+run_module(iface)
