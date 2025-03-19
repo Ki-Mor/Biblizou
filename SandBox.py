@@ -1,242 +1,367 @@
-"""Script Ecalluna en cours de travail"""
+"""
+Auteur : ExEco Environnement - François Botcazou
+Date de création : 2025/02
+Dernière mise à jour : 2025/03
+Version : 1.0
+Nom : NaturaXmlToXlsxEsp.py
+Groupe : Biblizou_PatNat
+Description : Module pour extraire des données d'espèces directive à partir de fichiers XML et les exporter dans un fichier Excel.
+Dépendances :
+    - Python 3.x
+    - QGIS (QgsMessageLog)
+    - xml.etree.ElementTree
+    - pandas
+    - openpyxl
+    - os, datetime
 
+Utilisation :
+    Ce module doit être appelé depuis une extension QGIS.
+"""
 
-from typing import List, Tuple
-import pandas as pd
+from PyQt5.QtWidgets import QFileDialog
+from qgis.core import QgsMessageLog, Qgis
+import xml.etree.ElementTree as ET
 import requests
-import re
-from pathlib import Path
-import concurrent.futures
+import pandas as pd
+import os
+from datetime import datetime
+from openpyxl import load_workbook
+from openpyxl.styles import Alignment, Border, Side, PatternFill, Font
 import time
-import logging
-from threading import Lock  # Importation du verrou pour synchroniser les mises à jour
+from collections import defaultdict
 
-# Configuration des logs
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+class NaturaXmlToXlsxEsp:
+    def __init__(self, iface):
+        self.iface = iface
 
-# Cache des résultats de la recherche Fuzzy (utilisation d'un cache global)
-cache_fuzzy_results = {}
-cache_taxref_results = {}
-lock = Lock()  # Création d'un verrou pour éviter les accès concurrents au DataFrame
-session = requests.Session()  # Session globale pour réutiliser les connexions HTTP
-# insee = {'Melgven' : 29146, 'Rosporden' : 29241, 'Elliant' : 29049, 'Saint-Yvi' :29272}
+    def run(self):
+        folder_path = self.obtain_folder_path()
+        if folder_path:
+            self.process_xml_files_in_folder(folder_path)
 
-# options d'affichage pandas
-pd.set_option('display.max_columns', None)
-pd.set_option('display.max_rows', None)
-pd.set_option('display.width', None)
-pd.set_option('display.max_colwidth', None)
+    def obtain_folder_path(self):
+        folder_path = QFileDialog.getExistingDirectory(None, "Sélectionner un dossier contenant les fichiers XML")
+        if not folder_path:
+            self.iface.messageBar().pushMessage("Annulation", "Aucun dossier sélectionné.", level=Qgis.Warning)
+            return None
+        return folder_path
 
-# Dossier contenant les fichiers CSV
-folder_path = r"\\192.168.1.100\ExEco_Env\Affaires_en_cours\REIE_2407_ZA les Costils Les Pieux_50_(SA2E et V.Simont)\DATA\XECO_PatNat\ecalluna"
-# folder_path = input("Entrez le chemin du dossier contenant les fichiers XML : ")
+    def truncate_sheet_name(sheet_name):
+        return sheet_name[:31]  # Limiter à 31 caractères maximum (restriction d'Excel)
 
-# Vérifier si le dossier existe
-if not Path(folder_path).exists():
-    raise OSError(f"Le dossier spécifié '{folder_path}' n'existe pas ou n'est pas accessible.")
+    def get_taxref_data(cd_nom, cache={}):
+        # Vérifier si les données sont déjà en cache
+        if cd_nom in cache:
+            return cache[cd_nom]
 
-# Lister tous les fichiers CSV dans le dossier
-csv_files = Path(folder_path).glob("*.csv")
+        # URL de l'API avec cd_nom comme identifiant
+        url = f"https://taxref.mnhn.fr/api/taxa/{cd_nom}"
 
-# DataFrame global pour accumuler toutes les données
-global_df = pd.DataFrame()
+        # Définir les headers pour l'API
+        headers = {"accept": "application/hal+json;version=1"}
 
-# Traiter chaque fichier CSV
-def process_csv(file_path: Path) -> pd.DataFrame:
-    try:
-        # Lire le fichier CSV avec pandas
-        df = pd.read_csv(file_path, skiprows=range(0, 1), sep=";", on_bad_lines='skip', encoding='utf-8')
-    except Exception as e:
-        logging.error(f"Erreur lors de la lecture du fichier {file_path.name}: {e}")
-        return pd.DataFrame()  # Retourner un DataFrame vide en cas d'erreur
-
-    # Vérifier la présence des colonnes requises et les gérer
-    if 'NomTaxCBNB' not in df.columns:
-        logging.warning(f"Colonne 'NomTaxCBNB' absente dans {file_path.name}, remplacement par des valeurs vides.")
-        df['NomTaxCBNB'] = ""
-    if 'Année_DernièreObservation' not in df.columns:
-        logging.warning(f"Colonne 'Année_DernièreObservation' absente dans {file_path.name}, remplacement par NaN.")
-        df['Année_DernièreObservation'] = pd.NA
-    if 'CD_Ref' not in df.columns:
-        logging.warning(f"Colonne 'CD_Ref' absente dans {file_path.name}, remplacement par 0.")
-        df['CD_Ref'] = 0
-
-    # Extraire les colonnes spécifiques
-    NomTaxCBNB = df['NomTaxCBNB'].tolist()
-    AnneeDerniereObservation = pd.to_numeric(df['Année_DernièreObservation'], errors='coerce').astype('Int64')
-    CD_Ref = df['CD_Ref'].fillna(0).astype(int).tolist()
-
-    # Extraire le nom de la commune à partir du nom du fichier
-    file_name = file_path.name
-    match = re.search(r'_([^_]+)\.csv$', file_name)
-
-    extracted_commune = match.group(1) if match else "Inconnu"
-
-    # Ajouter les colonnes supplémentaires à df
-    data = {
-        'NomTaxCBNB': NomTaxCBNB,
-        'Année_DernièreObservation': AnneeDerniereObservation,
-        'CD_Ref': CD_Ref,
-        'Commune': extracted_commune,
-        'Obs': 'CBN Brest'
-    }
-
-    return pd.DataFrame(data)
-
-# Charger les données depuis les fichiers CSV
-for file_path in csv_files:
-    df = process_csv(file_path)
-    if not df.empty:
-        global_df = pd.concat([global_df, df], ignore_index=True)
-
-# Fonction pour enrichir global_df
-def process_row(index, row, cache):
-    if pd.notna(row['NomTaxCBNB']) and row['NomTaxCBNB'].strip() != "":
-        scientific_name, reference_id = fuzzy_match(row['NomTaxCBNB'])
-        with lock:
-            global_df.at[index, 'CD_Ref'] = reference_id
-        logging.info(f"Modifications pour l'index {index}: {row['NomTaxCBNB']} -> {scientific_name}, {reference_id}")
-
-# Fonction pour corriger global_df
-def correct_CD_Ref_data():
-    global global_df
-
-    # Appliquer la parallélisation pour remplir le CD_Ref avec un cache global
-    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
-        futures = [
-            executor.submit(process_row, index, row, cache_fuzzy_results)
-            for index, row in global_df.iterrows()
-        ]
-        for future in concurrent.futures.as_completed(futures):
-            future.result()
-
-def fuzzy_match(nom_tax: str) -> Tuple[str, int]:
-    if nom_tax in cache_fuzzy_results:
-        return cache_fuzzy_results[nom_tax]
-
-    word = nom_tax.split()
-    genus, specie = word[0], word[1] if len(word) > 1 else ""
-    url = f'https://taxref.mnhn.fr/api/taxa/fuzzyMatch?term={genus}%20{specie}'
-
-    for attempt in range(5):
         try:
-            response = session.get(url, headers={'accept': "application/hal+json;version=1"}, timeout=20)
+            # Faire la requête GET
+            response = requests.get(url, headers=headers)
+
+            # Vérifier que la réponse est correcte (code 200)
             if response.status_code == 200:
                 data = response.json()
-                taxa = data.get('_embedded', {}).get('taxa', [])
-                if taxa:
-                    result = (taxa[0].get("scientificName", ""), int(taxa[0].get("referenceId", 0)))
-                    cache_fuzzy_results[nom_tax] = result
+
+                # Vérifier si la réponse contient des informations
+                if data:
+                    # Récupérer les informations pertinentes directement dans la réponse
+                    result = {
+                        'REGNE': data.get('kingdomName', ''),
+                        'GROUPE': data.get('vernacularGroup2', ''),
+                        'NOM_COMPLET': data.get('fullName', ''),
+                        'NOM_VERN': data.get('frenchVernacularName', '')
+                    }
+
+                    # Mettre les données dans le cache
+                    cache[cd_nom] = result
                     return result
-            return "", 0
-        except requests.RequestException as e:
-            logging.warning(f"Erreur API pour {nom_tax}, tentative {attempt + 1}: {e}")
-            time.sleep(2 ** attempt)
-    return "", 0
-
-def fetch_taxref_data(CD_Ref, cache={}):
-    # Vérifier si les données sont déjà en cache
-    if CD_Ref in cache:
-        return cache[CD_Ref]
-
-    # URL de l'API avec cd_nom comme identifiant
-    url = f"https://taxref.mnhn.fr/api/taxa/{CD_Ref}"
-
-    # Définir les headers pour l'API
-    headers = {"accept": "application/hal+json;version=1"}
-
-    try:
-        # Faire la requête GET
-        try:
-            response = session.get(url, headers=headers, timeout=30)
-            response.raise_for_status()  # Déclenche une exception pour les erreurs HTTP
-        except requests.Timeout:
-            logging.error(f"Timeout lors de la requête pour {CD_Ref}")
-            return {'REGNE': '', 'GROUPE': '', 'NOM_COMPLET': '', 'NOM_VERN': ''}
-        except requests.RequestException as e:
-            logging.error(f"Erreur API pour {CD_Ref}: {e}")
-            return {'REGNE': '', 'GROUPE': '', 'NOM_COMPLET': '', 'NOM_VERN': ''}
-
-        # Vérifier que la réponse est correcte (code 200)
-        if response.status_code == 200:
-            data = response.json()
-
-            # Vérifier si la réponse contient des informations
-            if data:
-                # Récupérer les informations pertinentes directement dans la réponse
-                result = {
-                    'REGNE': data.get('vernacularKingdomName', ''),
-                    'GROUPE': data.get('vernacularGroup2', ''),
-                    'NOM_COMPLET': data.get('fullName', ''),
-                    'NOM_VERN': data.get('frenchVernacularName', '')
-                }
-
-                # Mettre les données dans le cache
-                cache[CD_Ref] = result
-                return result
+                else:
+                    QgsMessageLog.logMessage(f"Aucun taxon trouvé pour {cd_nom}.", "NaturaXmlToXlsxEsp", Qgis.Warning)
+                    return {'REGNE': '', 'GROUPE': '', 'NOM_COMPLET': '', 'NOM_VERN': ''}
             else:
-                print(f"Aucun taxon trouvé pour {CD_Ref}.")
+                QgsMessageLog.logMessage(f"Erreur API pour {cd_nom}: {response.status_code}", "NaturaXmlToXlsxEsp", Qgis.Critical)
                 return {'REGNE': '', 'GROUPE': '', 'NOM_COMPLET': '', 'NOM_VERN': ''}
-        else:
-            print(f"Erreur API pour {CD_Ref}: {response.status_code}")
+        except Exception as e:
+            QgsMessageLog.logMessage(f"Erreur lors de l'interrogation de l'API pour {cd_nom}: {e}", "NaturaXmlToXlsxEsp", Qgis.Critical)
             return {'REGNE': '', 'GROUPE': '', 'NOM_COMPLET': '', 'NOM_VERN': ''}
-    except Exception as e:
-        print(f"Erreur lors de l'interrogation de l'API pour {CD_Ref}: {e}")
-        return {'REGNE': '', 'GROUPE': '', 'NOM_COMPLET': '', 'NOM_VERN': ''}
 
-def enrich_taxref_data():
-    global global_df
-    logging.info("Enrichissement du DataFrame avec les données de TaxRef :")
+    def xml_to_dataframe(xml_file, cache):
+        try:
+            tree = ET.parse(xml_file)
+            root = tree.getroot()
 
-    # Appliquer la parallélisation pour enrichir global_df
-    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
-        futures = [
-            executor.submit(enrich_row, index, row)
-            for index, row in global_df.iterrows()
-            if row['CD_Ref'] != 0 and row['CD_Ref'] not in cache_taxref_results
-        ]
-        for future in concurrent.futures.as_completed(futures):
-            future.result()
+            regnes, groupes, cd_noms, noms, nom_complets, nom_vern, sitecode, site_name = [], [], [], [], [], [], "", ""
 
-def enrich_row(index, row):
-    # Récupérer les données de TaxRef pour le CD_Ref donné
-    taxref_data = fetch_taxref_data(row['CD_Ref'], cache_taxref_results)
+            start_time: float = time.time()
 
-    # Couper NOM_VERN avant la première virgule
-    nom_vern = taxref_data['NOM_VERN']
-    if isinstance(nom_vern, str) and ',' in nom_vern:
-        taxref_data['NOM_VERN'] = nom_vern.split(',')[0].strip()
+            # Recherche de l'élément BIOTOP
+            for biotop_elem in root.iter('BIOTOP'):
+                sitecode_elem = biotop_elem.find('SITECODE')
+                site_name_elem = biotop_elem.find('SITE_NAME')
 
-    # Mettre à jour les colonnes correspondantes dans global_df
-    with lock:
-        global_df.at[index, 'REGNE'] = taxref_data['REGNE']
-        global_df.at[index, 'GROUPE'] = taxref_data['GROUPE']
-        global_df.at[index, 'NOM_COMPLET'] = taxref_data['NOM_COMPLET']
-        global_df.at[index, 'NOM_VERN'] = taxref_data['NOM_VERN']
+                # Vérification si les éléments sont bien trouvés et non vides
+                if sitecode_elem is not None and sitecode_elem.text:
+                    sitecode = sitecode_elem.text.strip()
+                else:
+                    sitecode = None  # ou 'no_sitecode' si tu veux une valeur par défaut
 
-    # Ajouter un message de log pour indiquer que la ligne a été traitée
-    logging.info(f"Ligne {index} traitée: CD_Ref={row['CD_Ref']}, REGNE={taxref_data['REGNE']}, GROUPE={taxref_data['GROUPE']}, NOM_COMPLET={taxref_data['NOM_COMPLET']}, NOM_VERN={taxref_data['NOM_VERN']}")
+                if site_name_elem is not None and site_name_elem.text:
+                    site_name = site_name_elem.text.strip()
+                else:
+                    site_name = None  # ou 'no_site_name' si tu veux une valeur par défaut
 
-# Pipeline de traitement
-def process_data():
-    logging.info("Début du traitement des données.")
-    correct_CD_Ref_data()
-    enrich_taxref_data()
-    logging.info("Traitement des données terminé.")
+                for species_elem in biotop_elem.iter('SPECIES'):
+                    for species_row_elem in species_elem.iter('SPECIES_ROW'):
+                        nom_elem = species_row_elem.find('NOM')
+                        cd_nom_elem = species_row_elem.find('CD_NOM')
 
-process_data()
-print(global_df.head(25))
+                        if cd_nom_elem is not None:
+                            cd_nom = cd_nom_elem.text
+                            nom = nom_elem.text
+                            taxon_info = get_taxref_data(cd_nom, cache)
 
-print(global_df.dtypes)  # Vérifie les types de colonnes
-print(global_df.head())  # Vérifie l'aperçu des données
-print(global_df['Année_DernièreObservation'].unique())  # Remplace par le bon nom de colonne
+                            regnes.append(taxon_info['REGNE'])
+                            groupes.append(taxon_info['GROUPE'])
+                            cd_noms.append(cd_nom_elem.text if cd_nom_elem is not None else "")
+                            noms.append(nom)
+                            nom_complets.append(taxon_info['NOM_COMPLET'])
+                            nom_vern.append(taxon_info['NOM_VERN'])
 
-pivot_df_commune = global_df.pivot_table(
-    index=['CD_Ref', 'NOM_COMPLET'],
-    columns=['Commune'],
-    values='Année_DernièreObservation',  # Assure-toi que cette colonne est bien numérique
-    aggfunc='max',  # Ou autre fonction d'agrégation appropriée
-    fill_value=''
-)
+            xml_processing_time = time.time() - start_time
+            QgsMessageLog.logMessage(f"Fichier {xml_file} traité en {xml_processing_time:.2f} secondes.", "NaturaXmlToXlsxEsp", Qgis.Critical)
 
-print(pivot_df_commune)
+            # Retourner le DataFrame avec les bonnes données
+            data = {
+                'REGNE': regnes,
+                'GROUPE': groupes,
+                'CD_NOM': cd_noms,
+                'NOM': noms,
+                'NOM_COMPLET': nom_complets,
+                'NOM_VERN': nom_vern
+            }
+
+            # S'assurer que toutes les listes ont la même longueur
+            max_len = max(len(regnes), len(groupes), len(cd_noms), len(noms), len(nom_complets), len(nom_vern))
+            regnes += [""] * (max_len - len(regnes))
+            groupes += [""] * (max_len - len(groupes))
+            cd_noms += [""] * (max_len - len(cd_noms))
+            noms += [""] * (max_len - len(noms))
+            nom_complets += [""] * (max_len - len(nom_complets))
+            nom_vern += [""] * (max_len - len(nom_vern))
+
+            df = pd.DataFrame(data)
+            return df, sitecode, site_name
+
+        except ET.ParseError as e:
+            QgsMessageLog.logMessage(f"Error parsing XML file {xml_file}: {e}", "NaturaXmlToXlsxEsp", Qgis.Critical)
+            return pd.DataFrame(columns=['REGNE', 'GROUPE', 'CD_NOM', 'NOM', 'NOM_COMPLET', 'NOM_VERN']), "", ""
+        except Exception as e:
+            QgsMessageLog.logMessage(f"Unexpected error with file {xml_file}: {e}", "NaturaXmlToXlsxEsp", Qgis.Critical)
+            return pd.DataFrame(columns=['REGNE', 'GROUPE', 'CD_NOM', 'NOM', 'NOM_COMPLET', 'NOM_VERN']), "", ""
+
+    def process_xml_files_in_folder(self, folder_path):
+        if not os.path.isdir(folder_path):
+            QgsMessageLog.logMessage(f"The path {folder_path} is not a valid directory.", "NaturaXmlToXlsxEsp", Qgis.Critical)
+            return
+
+        xml_files = [f for f in os.listdir(folder_path) if f.startswith('FR') and f.endswith('.xml') and len(f) == 13]
+
+        if not xml_files:
+            QgsMessageLog.logMessage(f"No XML files found in the folder {folder_path}", "NaturaXmlToXlsxEsp", Qgis.Critical)
+            return
+
+        cache = {}
+
+        # Initialize lists to store data for the "Animalia" and "Plantae" summary sheets
+        animalia_data = []
+        plantae_data = []
+
+        current_time = datetime.now().strftime("%Y%m%d%H%M%S")
+        excel_file = os.path.join(folder_path, f'N2000_Synthèse_des_espèces_AnxI-II_{current_time}.xlsx')
+
+        try:
+            QgsMessageLog.logMessage(f"\nDébut du traitement des fichiers XML...", "NaturaXmlToXlsxEsp", Qgis.Critical)
+
+            start_time = time.time()
+
+            workbook = xlsxwriter.Workbook(excel_file)
+            header_format = workbook.add_format({'bold': True, 'bg_color': '#009999', 'font_color': '#FFFFFF', 'align': 'center'})
+            normal_format = workbook.add_format({'font_size': 9, 'border': 1})
+            center_format = workbook.add_format({'font_size': 9, 'border': 1, 'align': 'center'})
+            highlight_format = workbook.add_format({'bg_color': '#91d2ff'})
+
+            # with pd.ExcelWriter(excel_file, engine='openpyxl') as writer:
+            #     for idx, xml_file in enumerate(xml_files, start=1):
+            #         QgsMessageLog.logMessage(f"Traitement du fichier {idx}/{len(xml_files)} : {xml_file}...", "NaturaXmlToXlsxEsp", Qgis.Critical)
+            #         full_path = os.path.join(folder_path, xml_file)
+            #         df, sitecode, site_name = xml_to_dataframe(full_path, cache)
+            #
+            #         if not df.empty:
+            #             # Vérifier et remplacer les valeurs vides ou manquantes de SITECODE et SITE_NAME
+            #             if not sitecode:
+            #                 QgsMessageLog.logMessage(f"Warning: SITECODE is empty for file {xml_file}. Using 'no_sitecode'.", "NaturaXmlToXlsxEsp", Qgis.Critical)
+            #                 sitecode = "no_sitecode"
+            #             if not site_name:
+            #                 QgsMessageLog.logMessage(f"Warning: SITE_NAME is empty for file {xml_file}. Using 'no_site_name'.", "NaturaXmlToXlsxEsp", Qgis.Critical)
+            #                 site_name = "no_site_name"
+
+            for idx, xml_file in enumerate(xml_files, start=1):
+                QgsMessageLog.logMessage(f"Traitement du fichier {idx}/{len(xml_files)} : {xml_file}...",
+                                         "NaturaXmlToXlsxEsp", Qgis.Critical)
+                full_path = os.path.join(folder_path, xml_file)
+                df, sitecode, site_name = xml_to_dataframe(full_path, cache)
+
+                if not df.empty:
+                    sheet_name = f"{sitecode}-{site_name}"[:31]  # Truncate to 31 characters
+                    worksheet = workbook.add_worksheet(sheet_name)
+
+                    for col_num, col_name in enumerate(df.columns):
+                        worksheet.write(0, col_num, col_name, header_format)
+
+                    for row_num, row_data in df.iterrows():
+                        for col_num, value in enumerate(row_data):
+                            fmt = center_format if value == 'X' else normal_format
+                            worksheet.write(row_num + 1, col_num, value, fmt)
+
+                        # # Ajouter à la liste animalia_data si REGNE == "Animalia"
+                        # if "Animalia" in df['REGNE'].values:
+                        #     for _, row in df[df['REGNE'] == "Animalia"].iterrows():
+                        #         animalia_data.append({
+                        #             "GROUPE": row["GROUPE"],
+                        #             "CD_NOM": row["CD_NOM"],
+                        #             "NOM_COMPLET": row["NOM_COMPLET"],
+                        #             "NOM_VERN": row["NOM_VERN"],
+                        #             "SITECODE - SITE_NAME": f"{sitecode} - {site_name}",
+                        #         })
+                        #
+                        # # Ajouter à la liste plantae_data si REGNE == "Plantae"
+                        # if "Plantae" in df['REGNE'].values:
+                        #     for _, row in df[df['REGNE'] == "Plantae"].iterrows():
+                        #         plantae_data.append({
+                        #             "GROUPE": row["GROUPE"],
+                        #             "CD_NOM": row["CD_NOM"],
+                        #             "NOM_COMPLET": row["NOM_COMPLET"],
+                        #             "NOM_VERN": row["NOM_VERN"],
+                        #             "SITECODE - SITE_NAME": f"{sitecode} - {site_name}",
+                        #         })
+
+                        # Générer un nom d'onglet unique basé sur SITECODE et SITE_NAME
+                        sheet_name = f"{sitecode}-{site_name}"
+                        QgsMessageLog.logMessage(f"Nom d'onglet généré: {sheet_name}", "NaturaXmlToXlsxEsp", Qgis.Critical)
+
+                        sheet_name_truncated = truncate_sheet_name(sheet_name)
+
+                        # Écrire les données dans la feuille correspondante
+                        df.drop(columns=['NOM'], inplace=True)  # Exclure la colonne NOM
+                        df.to_excel(writer, sheet_name=sheet_name_truncated, index=False)
+                        QgsMessageLog.logMessage(f"Le fichier {xml_file} a été traité et ajouté sous la feuille {sheet_name_truncated}.", "NaturaXmlToXlsxEsp", Qgis.Critical)
+                    else:
+                        QgsMessageLog.logMessage(f"Warning: No data exported for {xml_file}", "NaturaXmlToXlsxEsp", Qgis.Critical)
+
+            # Synthèse sheets
+            def write_summary_sheet(sheet_name, data):
+                if not data:
+                    return
+                df_summary = pd.DataFrame(data)
+                pivot_df = df_summary.pivot_table(index=["GROUPE", "CD_NOM", "NOM_COMPLET", "NOM_VERN"],
+                                                    columns="SITECODE - SITE_NAME",
+                                                    aggfunc=lambda x: "X", fill_value="")
+
+                worksheet = workbook.add_worksheet(sheet_name)
+                for col_num, col_name in enumerate(pivot_df.columns.insert(0, "".join(pivot_df.index.names))):
+                    worksheet.write(0, col_num, col_name, header_format)
+
+                for row_num, (index, row_data) in enumerate(pivot_df.iterrows(), start=1):
+                    worksheet.write_row(row_num, 0, list(index) + row_data.tolist(), normal_format)
+
+            write_summary_sheet("Synthèse Animalia", animalia_data)
+            write_summary_sheet("Synthèse Plantae", plantae_data)
+
+            workbook.close()
+            processing_time = time.time() - start_time
+            QgsMessageLog.logMessage(f"\nTraitement terminé en {processing_time:.2f} secondes.", "NaturaXmlToXlsxEsp", Qgis.Critical)
+
+            except Exception as e:
+            QgsMessageLog.logMessage(f"An error occurred: {e}", "NaturaXmlToXlsxEsp", Qgis.Critical)
+
+            # Créer la feuille "Synthèse Animalia" après la boucle
+            if animalia_data:
+                animalia_df = pd.DataFrame(animalia_data)
+
+                # Pivot the table
+                pivot_df = animalia_df.pivot_table(index=["GROUPE", "CD_NOM", "NOM_COMPLET", "NOM_VERN"],
+                                                   columns="SITECODE - SITE_NAME",
+                                                   aggfunc=lambda x: "X", fill_value="")
+                with pd.ExcelWriter(excel_file, engine='openpyxl', mode='a') as writer:
+                    pivot_df.to_excel(writer, sheet_name="Synthèse Animalia", index=True)
+                    QgsMessageLog.logMessage("La feuille 'Synthèse Animalia' a été créée.", "NaturaXmlToXlsxEsp", Qgis.Critical)
+
+            # Créer la feuille "Synthèse Plantae" après la boucle
+            if plantae_data:
+                plantae_df = pd.DataFrame(plantae_data)
+
+                # Pivot the table to get "X" where CD_NOM is associated with NM_SFFZN - LB_ZN
+                pivot_df = plantae_df.pivot_table(index=["GROUPE", "CD_NOM", "NOM_COMPLET", "NOM_VERN"],
+                                                  columns="SITECODE - SITE_NAME",
+                                                  aggfunc=lambda x: "X", fill_value="")
+                with pd.ExcelWriter(excel_file, engine='openpyxl', mode='a') as writer:
+                    pivot_df.to_excel(writer, sheet_name="Synthèse Plantae", index=True)
+                    QgsMessageLog.logMessage("La feuille 'Synthèse Plantae' a été créée.", "NaturaXmlToXlsxEsp", Qgis.Critical)
+
+            processing_time = time.time() - start_time
+            QgsMessageLog.logMessage(f"\nTraitement des fichiers XML terminé en {processing_time:.2f} secondes.", "NaturaXmlToXlsxEsp", Qgis.Critical)
+
+            # After writing the data, apply formatting
+            wb = load_workbook(excel_file)
+
+            for sheet_name in wb.sheetnames:
+                ws = wb[sheet_name]
+
+                header_fill = PatternFill(start_color="009999", end_color="009999", fill_type="solid")
+                cell_font = Font(color="000000", size=9)
+                border_color = "D9D9D9"
+                thin_border = Border(
+                    left=Side(style='thin', color=border_color),
+                    right=Side(style='thin', color=border_color),
+                    top=Side(style='thin', color=border_color),
+                    bottom=Side(style='thin', color=border_color)
+                )
+
+                for cell in ws[1]:
+                    cell.font = Font(name='Calibri', bold=True, color="FFFFFF", size=10)
+                    cell.fill = header_fill
+                    cell.alignment = Alignment(horizontal='center', vertical='center')
+
+                for row in ws.iter_rows(min_row=2):  # iter_rows() directly returns the rows, no need for len()
+                    for cell in row:
+                        cell.font = cell_font
+                        cell.alignment = Alignment(horizontal='left', vertical='center')
+                        cell.border = thin_border
+
+                        if cell.value == 'X':
+                            cell.alignment = Alignment(horizontal='center', vertical='center')
+                            cell.fill = PatternFill(start_color="91d2ff", end_color="91d2ff", fill_type="solid")
+
+                if sheet_name not in ["Synthèse Animalia", "Synthèse Plantae"]:
+                    ws.sheet_state = 'hidden'
+
+            wb.save(excel_file)
+
+            QgsMessageLog.logMessage(f"Data successfully exported and formatted to {excel_file}", "NaturaXmlToXlsxEsp", Qgis.Critical)
+
+        except Exception as e:
+            QgsMessageLog.logMessage(f"An error occurred while processing XML files: {e}", "NaturaXmlToXlsxEsp", Qgis.Critical)
+
+
+# Pour exécuter le module dans QGIS
+def run_module(iface):
+        module = NaturaXmlToXlsxEsp(iface)
+        module.run()
+
+run_module(iface)
